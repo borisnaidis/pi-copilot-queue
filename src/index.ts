@@ -57,8 +57,11 @@ export default function copilotQueueExtension(pi: ExtensionAPI) {
     };
   });
 
-  pi.on("tool_call", (_event, ctx) => {
+  pi.on("tool_call", (event, ctx) => {
     if (ctx.model?.provider !== ACTIVE_PROVIDER) {
+      return;
+    }
+    if (event.toolName !== TOOL_NAME) {
       return;
     }
 

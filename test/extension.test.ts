@@ -145,7 +145,7 @@ void test("session status and reset commands work", async () => {
   assert.ok(captured.commandHandler);
   assert.ok(toolCallHook);
 
-  toolCallHook?.({}, createToolCtx());
+  toolCallHook?.({ toolName: TOOL_NAME }, createToolCtx());
   await captured.commandHandler?.("session status", createCommandCtx(notifications, true));
   assert.ok(notifications.some((line) => line.includes("Session status:")));
   assert.ok(notifications.some((line) => line.includes("Tool calls: 1")));
@@ -168,14 +168,30 @@ void test("tool-call warning fires at configurable threshold", async () => {
   assert.ok(toolCallHook);
 
   await captured.commandHandler?.("session threshold 999 2", createCommandCtx(notifications));
-  toolCallHook?.({}, createToolCtx({ hasUI: true, notifications }));
-  toolCallHook?.({}, createToolCtx({ hasUI: true, notifications }));
+  toolCallHook?.({ toolName: TOOL_NAME }, createToolCtx({ hasUI: true, notifications }));
+  toolCallHook?.({ toolName: TOOL_NAME }, createToolCtx({ hasUI: true, notifications }));
 
   assert.ok(
     notifications.some(
       (line) => line.includes("Session hygiene warning") && line.includes("2 tool calls reached")
     )
   );
+});
+
+void test("session tool-call counter ignores non-ask_user tools", async () => {
+  const captured = createCaptured();
+  extension(createPi(captured));
+
+  const notifications: string[] = [];
+  const toolCallHook = captured.eventHandlers.get("tool_call");
+
+  assert.ok(captured.commandHandler);
+  assert.ok(toolCallHook);
+
+  toolCallHook?.({ toolName: "bash" }, createToolCtx());
+  await captured.commandHandler?.("session status", createCommandCtx(notifications, true));
+
+  assert.ok(notifications.some((line) => line.includes("Tool calls: 0")));
 });
 
 void test("does not inject ask_user policy for non-copilot provider", () => {
