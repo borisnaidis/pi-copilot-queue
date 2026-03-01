@@ -2,7 +2,7 @@
 
 Queue user feedback ahead of time and let the model consume it via an `ask_user` tool.
 
-This extension is inspired by TaskSync-style workflows: you preload responses, then your Copilot-like agent pulls them during long runs.
+This extension is inspired by [TaskSync](https://github.com/4regab/TaskSync)-style workflows: you preload responses, then your Copilot-like agent pulls them during long runs.
 
 ## What it does
 
@@ -22,6 +22,8 @@ When `ask_user` is called:
 
 ## Install
 
+### Option 1: Direct with Pi
+
 ```bash
 pi install /absolute/path/to/pi-copilot-queue
 ```
@@ -29,6 +31,21 @@ pi install /absolute/path/to/pi-copilot-queue
 Then reload in Pi:
 
 ```text
+/reload
+```
+
+### Option 2: With [pi-extmgr](https://github.com/ayagmar/pi-extmgr) (`/extensions`)
+
+Install extmgr once:
+
+```bash
+pi install npm:pi-extmgr
+```
+
+Then in Pi (GitHub source):
+
+```text
+/extensions install git:github.com/ayagmar/pi-copilot-queue
 /reload
 ```
 
