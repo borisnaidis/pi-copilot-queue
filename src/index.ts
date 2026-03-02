@@ -20,15 +20,22 @@ const DONE_RESPONSE = "done";
 export default function copilotQueueExtension(pi: ExtensionAPI) {
   let state: QueueState = initialState();
   let pendingAskUserResolve: ((text: string) => void) | undefined;
-  let reinjectPolicyAfterCompaction = false;
 
   function hasPendingAskUser(): boolean {
     return Boolean(pendingAskUserResolve);
   }
 
+  function isCopilotProvider(ctx: { model?: { provider?: string } }): boolean {
+    return ctx.model?.provider === ACTIVE_PROVIDER;
+  }
+
   function resolvePendingAskUser(
     text: string,
-    ctx: { hasUI: boolean; ui: { setStatus: (key: string, text?: string) => void } }
+    ctx: {
+      hasUI: boolean;
+      model?: { provider?: string };
+      ui: { setStatus: (key: string, text?: string) => void };
+    }
   ): boolean {
     if (!pendingAskUserResolve) return false;
 
@@ -39,7 +46,9 @@ export default function copilotQueueExtension(pi: ExtensionAPI) {
     return true;
   }
 
-  function syncState(ctx: Pick<ExtensionContext, "sessionManager" | "hasUI" | "ui">): void {
+  function syncState(
+    ctx: Pick<ExtensionContext, "sessionManager" | "hasUI" | "ui" | "model">
+  ): void {
     state = restoreFromContext(ctx);
     updateStatus(ctx, state, hasPendingAskUser());
   }
@@ -48,37 +57,16 @@ export default function copilotQueueExtension(pi: ExtensionAPI) {
   pi.on("session_switch", (_event, ctx) => syncState(ctx));
   pi.on("session_tree", (_event, ctx) => syncState(ctx));
   pi.on("session_fork", (_event, ctx) => syncState(ctx));
+  pi.on("model_select", (_event, ctx) => updateStatus(ctx, state, hasPendingAskUser()));
   pi.on("session_compact", (_event, ctx) => {
-    reinjectPolicyAfterCompaction = true;
     // Compaction can prune earlier custom entries; persist current state again
     // so queue/autopilot/session settings remain available after reloads.
     persistState(pi, state);
     updateStatus(ctx, state, hasPendingAskUser());
   });
-  pi.on("context", (event, ctx) => {
-    if (ctx.model?.provider !== ACTIVE_PROVIDER) {
-      return;
-    }
-    if (!reinjectPolicyAfterCompaction) {
-      return;
-    }
-
-    reinjectPolicyAfterCompaction = false;
-    const reinforcementMessage = {
-      role: "custom",
-      customType: "copilot-queue:policy-reinforcement",
-      content: COPILOT_ASK_USER_POLICY,
-      display: false,
-      timestamp: Date.now(),
-    } as (typeof event.messages)[number];
-
-    return {
-      messages: [...event.messages, reinforcementMessage],
-    };
-  });
 
   pi.on("before_agent_start", (event, ctx) => {
-    if (ctx.model?.provider !== ACTIVE_PROVIDER) {
+    if (!isCopilotProvider(ctx)) {
       return;
     }
 
@@ -88,7 +76,7 @@ export default function copilotQueueExtension(pi: ExtensionAPI) {
   });
 
   pi.on("tool_call", (event, ctx) => {
-    if (ctx.model?.provider !== ACTIVE_PROVIDER) {
+    if (!isCopilotProvider(ctx)) {
       return;
     }
     if (event.toolName !== TOOL_NAME) {
@@ -106,7 +94,7 @@ export default function copilotQueueExtension(pi: ExtensionAPI) {
   });
 
   pi.on("input", (event, ctx) => {
-    if (ctx.model?.provider !== ACTIVE_PROVIDER) {
+    if (!isCopilotProvider(ctx)) {
       return { action: "continue" };
     }
 
@@ -363,7 +351,7 @@ export default function copilotQueueExtension(pi: ExtensionAPI) {
       ),
     }),
     async execute(_toolCallId, params, signal, _onUpdate, ctx) {
-      if (ctx.model?.provider !== ACTIVE_PROVIDER) {
+      if (!isCopilotProvider(ctx)) {
         return askManuallyOrFallback(params.prompt, ctx, state.fallbackResponse);
       }
 
@@ -587,11 +575,20 @@ function persistState(pi: ExtensionAPI, state: QueueState): void {
 }
 
 function updateStatus(
-  ctx: { hasUI: boolean; ui: { setStatus: (key: string, text?: string) => void } },
+  ctx: {
+    hasUI: boolean;
+    model?: { provider?: string };
+    ui: { setStatus: (key: string, text?: string) => void };
+  },
   state: QueueState,
   waitingForQueue: boolean
 ): void {
   if (!ctx.hasUI) return;
+  if (ctx.model?.provider !== ACTIVE_PROVIDER) {
+    ctx.ui.setStatus(EXTENSION_COMMAND);
+    return;
+  }
+
   const autopilot = state.autopilotEnabled
     ? `autopilot:${state.autopilotPrompts.length}`
     : "autopilot:off";

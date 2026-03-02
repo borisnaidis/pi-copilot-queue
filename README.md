@@ -17,7 +17,7 @@ This extension is inspired by [TaskSync](https://github.com/4regab/TaskSync)-sty
 - Tracks session elapsed time and tool-call count in status line
 - Emits session hygiene warnings at configurable thresholds (default: 120 minutes, 50 tool calls)
 - Persists state in session entries
-- Shows queue/autopilot/session state in Pi status line
+- Shows queue/autopilot/session state in Pi status line when provider is `github-copilot`
 
 When `ask_user` is called:
 
@@ -26,7 +26,7 @@ When `ask_user` is called:
 3. Else in interactive UI (`github-copilot` provider) → waits for `/copilot-queue add <message>` or `/copilot-queue done` (optionally with timeout)
 4. Else → returns fallback response (`continue` by default)
 
-When current model provider is not `github-copilot`, queue/autopilot is bypassed and `ask_user` uses manual/fallback behavior only.
+When current model provider is not `github-copilot`, queue/autopilot is bypassed, `ask_user` uses manual/fallback behavior only, and the extension status line is hidden.
 
 ## Install
 

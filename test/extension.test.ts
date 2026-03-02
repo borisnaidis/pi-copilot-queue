@@ -206,31 +206,6 @@ void test("session compact persists current queue state", async () => {
   assert.deepEqual((lastEntry?.data as { queue?: string[] }).queue, ["preserve me"]);
 });
 
-void test("session compact schedules one-time ask_user policy reinforcement", () => {
-  const captured = createCaptured();
-  extension(createPi(captured));
-
-  const compactHook = captured.eventHandlers.get("session_compact");
-  const contextHook = captured.eventHandlers.get("context");
-
-  assert.ok(compactHook);
-  assert.ok(contextHook);
-
-  compactHook?.({}, createToolCtx());
-
-  const first = contextHook?.({ messages: [] }, createToolCtx()) as
-    | { messages?: { role?: string; customType?: string; content?: string }[] }
-    | undefined;
-  assert.ok(first?.messages);
-  assert.equal(first?.messages?.length, 1);
-  assert.equal(first?.messages?.[0]?.role, "custom");
-  assert.equal(first?.messages?.[0]?.customType, "copilot-queue:policy-reinforcement");
-  assert.match(first?.messages?.[0]?.content ?? "", /call the ask_user tool/i);
-
-  const second = contextHook?.({ messages: [] }, createToolCtx());
-  assert.equal(second, undefined);
-});
-
 void test("session status and reset commands work", async () => {
   const captured = createCaptured();
   extension(createPi(captured));
@@ -420,6 +395,26 @@ void test("non-copilot providers bypass queue and autopilot", async () => {
   assert.equal(result.details.source, "fallback");
 });
 
+void test("status line is cleared when model switches away from github-copilot", async () => {
+  const captured = createCaptured();
+  extension(createPi(captured));
+
+  const statuses: { key: string; text?: string }[] = [];
+  const modelSelectHook = captured.eventHandlers.get("model_select");
+
+  assert.ok(captured.commandHandler);
+  assert.ok(modelSelectHook);
+
+  await captured.commandHandler?.("add queued reply", createCommandCtx(undefined, true, "github-copilot", statuses));
+  assert.match(statuses[statuses.length - 1]?.text ?? "", /Copilot Queue/);
+
+  modelSelectHook?.({}, createToolCtx({ provider: "anthropic", hasUI: true, statuses }));
+
+  const lastStatus = statuses[statuses.length - 1];
+  assert.equal(lastStatus?.key, EXTENSION_COMMAND);
+  assert.equal(lastStatus?.text, undefined);
+});
+
 void test("uses fallback when queue is empty and no UI", async () => {
   const captured = createCaptured();
   extension(createPi(captured));
@@ -438,24 +433,35 @@ void test("uses fallback when queue is empty and no UI", async () => {
   assert.equal(result.details.source, "fallback");
 });
 
-function createCommandCtx(notifications?: string[], hasUI = false) {
+function createCommandCtx(
+  notifications?: string[],
+  hasUI = false,
+  provider = "github-copilot",
+  statuses?: { key: string; text?: string }[]
+) {
   return {
     hasUI,
+    model: { provider },
     ui: {
       notify: (message: string) => notifications?.push(message),
-      setStatus: () => undefined,
+      setStatus: (key: string, text?: string) => statuses?.push({ key, text }),
     },
   };
 }
 
-function createToolCtx(options?: { provider?: string; hasUI?: boolean; notifications?: string[] }) {
+function createToolCtx(options?: {
+  provider?: string;
+  hasUI?: boolean;
+  notifications?: string[];
+  statuses?: { key: string; text?: string }[];
+}) {
   return {
     hasUI: options?.hasUI ?? false,
     model: { provider: options?.provider ?? "github-copilot" },
     ui: {
       input: () => Promise.resolve(undefined),
       notify: (message: string) => options?.notifications?.push(message),
-      setStatus: () => undefined,
+      setStatus: (key: string, text?: string) => options?.statuses?.push({ key, text }),
     },
   };
 }
