@@ -405,7 +405,10 @@ void test("status line is cleared when model switches away from github-copilot",
   assert.ok(captured.commandHandler);
   assert.ok(modelSelectHook);
 
-  await captured.commandHandler?.("add queued reply", createCommandCtx(undefined, true, "github-copilot", statuses));
+  await captured.commandHandler?.(
+    "add queued reply",
+    createCommandCtx(undefined, true, "github-copilot", statuses)
+  );
   assert.match(statuses[statuses.length - 1]?.text ?? "", /Copilot Queue/);
 
   modelSelectHook?.({}, createToolCtx({ provider: "anthropic", hasUI: true, statuses }));
