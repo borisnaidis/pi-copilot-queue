@@ -1,4 +1,5 @@
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
+import { Text } from "@mariozechner/pi-tui";
 import { Type } from "@sinclair/typebox";
 import {
   ACTIVE_PROVIDER,
@@ -350,6 +351,16 @@ export default function copilotQueueExtension(pi: ExtensionAPI) {
         Type.String({ description: "Question to display when queue and autopilot are empty" })
       ),
     }),
+    renderCall(args, theme) {
+      const prompt = args.prompt;
+      let text = theme.fg("toolTitle", theme.bold(`${TOOL_NAME} `));
+      if (prompt) {
+        text += theme.fg("dim", prompt);
+      } else {
+        text += theme.fg("dim", "Waiting for user input...");
+      }
+      return new Text(text, 0, 0);
+    },
     async execute(_toolCallId, params, signal, _onUpdate, ctx) {
       if (!isCopilotProvider(ctx)) {
         return askManuallyOrFallback(params.prompt, ctx, state.fallbackResponse);
@@ -516,7 +527,7 @@ async function waitForQueueInput(options: {
         : " Waiting without timeout.";
     notify(
       ctx,
-      `Queue empty. Waiting for /copilot-queue add <message> or /copilot-queue done.${timeoutText} Prompt: ${question}`
+      `Queue empty. Waiting for /copilot-queue add <message> or /copilot-queue done.${timeoutText}`
     );
   }
 
