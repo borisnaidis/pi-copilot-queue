@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
-import { resolveConfiguredProviders } from "../src/config.js";
+import { resolveConfiguredProviders, writeProjectConfiguredProviders } from "../src/config.js";
 
 function createTempDir(): string {
   return mkdtempSync(join(tmpdir(), "pi-copilot-queue-"));
@@ -100,5 +100,21 @@ void test("resolveConfiguredProviders allows disabling with an empty array", () 
   } finally {
     rmSync(cwd, { recursive: true, force: true });
     rmSync(homeDir, { recursive: true, force: true });
+  }
+});
+
+void test("writeProjectConfiguredProviders writes project settings", () => {
+  const cwd = createTempDir();
+
+  try {
+    const path = writeProjectConfiguredProviders(cwd, ["github-copilot", "openai"]);
+
+    assert.equal(path, join(cwd, ".pi", "settings.json"));
+    assert.deepEqual(resolveConfiguredProviders(cwd, cwd), ["github-copilot", "openai"]);
+
+    const raw = readFileSync(path, "utf8");
+    assert.match(raw, /"providers": \[\s+"github-copilot",\s+"openai"\s+\]/s);
+  } finally {
+    rmSync(cwd, { recursive: true, force: true });
   }
 });

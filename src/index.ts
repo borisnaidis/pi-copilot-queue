@@ -2,7 +2,7 @@ import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-age
 import { Text } from "@mariozechner/pi-tui";
 import { Type } from "@sinclair/typebox";
 import { buildHelpText, parseCommand } from "./commands.js";
-import { resolveConfiguredProviders } from "./config.js";
+import { resolveConfiguredProviders, writeProjectConfiguredProviders } from "./config.js";
 import {
   COPILOT_ASK_USER_POLICY,
   COPILOT_ASK_USER_REMINDER_MESSAGE,
@@ -19,11 +19,11 @@ import { notifyTerminal } from "./notify.js";
 import type { QueueState } from "./types.js";
 
 const STOP_RESPONSE = "stop";
-const configuredProviders = resolveConfiguredProviders(process.cwd());
-const configuredProviderLabel =
-  configuredProviders.length > 0 ? configuredProviders.join(", ") : "none";
+let configuredProviders = resolveConfiguredProviders(process.cwd());
 
 export default function copilotQueueExtension(pi: ExtensionAPI) {
+  refreshConfiguredProviders();
+
   let state: QueueState = initialState();
   let pendingAskUserResolve: ((text: string) => void) | undefined;
   let currentRunStarted = false;
@@ -62,6 +62,7 @@ export default function copilotQueueExtension(pi: ExtensionAPI) {
   function syncState(
     ctx: Pick<ExtensionContext, "sessionManager" | "hasUI" | "ui" | "model">
   ): void {
+    refreshConfiguredProviders();
     state = restoreFromContext(ctx);
     currentRunStarted = false;
     currentRunAskUserCallCount = 0;
@@ -287,6 +288,43 @@ export default function copilotQueueExtension(pi: ExtensionAPI) {
           return Promise.resolve();
         }
 
+        case "providers": {
+          refreshConfiguredProviders();
+          const raw = command.value.trim();
+          if (!raw || raw === "show" || raw === "list" || raw === "status") {
+            notify(ctx, buildConfiguredProvidersText());
+            return Promise.resolve();
+          }
+
+          if (raw === "off" || raw === "clear") {
+            const path = writeProjectConfiguredProviders(process.cwd(), []);
+            refreshConfiguredProviders();
+            updateStatus(ctx, state, hasPendingAskUser());
+            notify(ctx, `Copilot Queue providers disabled for this project. Saved to ${path}.`);
+            return Promise.resolve();
+          }
+
+          const values = /^set(?:\s+|$)/i.test(raw) ? raw.replace(/^set\s*/i, "").trim() : raw;
+          const providers = values
+            .split(/[\s,]+/)
+            .map((item) => item.trim())
+            .filter(Boolean);
+
+          if (providers.length === 0) {
+            notify(ctx, `Usage: /${EXTENSION_COMMAND} providers <name... | off>`);
+            return Promise.resolve();
+          }
+
+          const path = writeProjectConfiguredProviders(process.cwd(), providers);
+          refreshConfiguredProviders();
+          updateStatus(ctx, state, hasPendingAskUser());
+          notify(
+            ctx,
+            `Copilot Queue providers updated: ${providers.join(", ")}. Saved to ${path}.`
+          );
+          return Promise.resolve();
+        }
+
         case "fallback": {
           if (!command.value) {
             notify(ctx, `Fallback response: ${state.fallbackResponse}`);
@@ -427,7 +465,7 @@ export default function copilotQueueExtension(pi: ExtensionAPI) {
   pi.registerTool({
     name: TOOL_NAME,
     label: "Ask User (Queue-Aware)",
-    description: `For configured providers (${configuredProviderLabel}): call this instead of ending with a direct assistant reply. Returns the next queued response first, then autopilot prompts in cycle mode. If queue is empty in UI mode, waits for /copilot-queue add or /copilot-queue done.`,
+    description: `For configured providers: call this instead of ending with a direct assistant reply. Returns the next queued response first, then autopilot prompts in cycle mode. If queue is empty in UI mode, waits for /copilot-queue add or /copilot-queue done.`,
     parameters: Type.Object({
       prompt: Type.Optional(
         Type.String({ description: "Question to display when queue and autopilot are empty" })
@@ -567,7 +605,7 @@ function buildSessionStatusText(state: QueueState): string {
 
   return [
     `Session status:`,
-    `- Managed providers: ${configuredProviders.length > 0 ? configuredProviderLabel : "(disabled)"}`,
+    `- Managed providers: ${getConfiguredProviderLabel()}`,
     `- Elapsed: ${elapsed}`,
     `- Tool calls: ${state.toolCallCount}`,
     `- Completed managed-provider runs: ${state.completedRunCount}`,
@@ -584,6 +622,25 @@ function buildSessionStatusText(state: QueueState): string {
   ]
     .filter((line): line is string => Boolean(line))
     .join("\n");
+}
+
+function getConfiguredProviderLabel(): string {
+  return configuredProviders.length > 0 ? configuredProviders.join(", ") : "(disabled)";
+}
+
+function buildConfiguredProvidersText(): string {
+  return [
+    `Copilot Queue provider settings:`,
+    `- Active providers: ${getConfiguredProviderLabel()}`,
+    `- Set this project: /${EXTENSION_COMMAND} providers <name...>`,
+    `- Disable this project: /${EXTENSION_COMMAND} providers off`,
+    `- Project file: .pi/settings.json`,
+    `- Global fallback: ~/.pi/agent/settings.json`,
+  ].join("\n");
+}
+
+function refreshConfiguredProviders(cwd: string = process.cwd()): void {
+  configuredProviders = resolveConfiguredProviders(cwd);
 }
 
 function formatComplianceRate(state: QueueState): string {

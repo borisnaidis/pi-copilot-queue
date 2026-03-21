@@ -1,4 +1,7 @@
 import assert from "node:assert/strict";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
 import test from "node:test";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import extension from "../src/index.js";
@@ -37,6 +40,15 @@ function createPi(captured: Captured): ExtensionAPI {
 
 function createCaptured(): Captured {
   return { entries: [], eventHandlers: new Map() };
+}
+
+function createTempDir(): string {
+  return mkdtempSync(join(tmpdir(), "pi-copilot-queue-"));
+}
+
+function writeJson(path: string, data: unknown): void {
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, `${JSON.stringify(data, null, 2)}\n`);
 }
 
 void test("registers expected command and tool", () => {
@@ -602,6 +614,51 @@ void test("uses fallback when queue is empty and no UI", async () => {
 
   assert.equal(result.content[0]?.text, "continue");
   assert.equal(result.details.source, "fallback");
+});
+
+void test("providers command updates project settings and managed provider scope", async () => {
+  const previousCwd = process.cwd();
+  const cwd = createTempDir();
+
+  try {
+    writeJson(join(cwd, ".pi", "settings.json"), {
+      copilotQueue: {
+        providers: ["github-copilot"],
+      },
+    });
+    process.chdir(cwd);
+
+    const captured = createCaptured();
+    extension(createPi(captured));
+
+    const beforeAgentStartHook = captured.eventHandlers.get("before_agent_start");
+    assert.ok(captured.commandHandler);
+    assert.ok(beforeAgentStartHook);
+
+    const beforeUpdate = beforeAgentStartHook?.(
+      { systemPrompt: "base prompt" },
+      createToolCtx({ provider: "openai" })
+    );
+    assert.equal(beforeUpdate, undefined);
+
+    await captured.commandHandler?.("providers openai anthropic", createCommandCtx());
+
+    const settingsPath = join(cwd, ".pi", "settings.json");
+    const written = JSON.parse(readFileSync(settingsPath, "utf8")) as {
+      copilotQueue?: { providers?: string[] };
+    };
+    assert.deepEqual(written.copilotQueue?.providers, ["openai", "anthropic"]);
+
+    const afterUpdate = beforeAgentStartHook?.(
+      { systemPrompt: "base prompt" },
+      createToolCtx({ provider: "openai" })
+    ) as { systemPrompt: string } | undefined;
+    assert.ok(afterUpdate);
+    assert.match(afterUpdate.systemPrompt, /call the ask_user tool/i);
+  } finally {
+    process.chdir(previousCwd);
+    rmSync(cwd, { recursive: true, force: true });
+  }
 });
 
 function createCommandCtx(

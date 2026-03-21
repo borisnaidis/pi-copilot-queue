@@ -29,6 +29,13 @@ void test("parseCommand parses capture", () => {
   assert.deepEqual(parseCommand("capture off"), { name: "capture", mode: "off" });
 });
 
+void test("parseCommand parses providers", () => {
+  assert.deepEqual(parseCommand("providers github-copilot openai"), {
+    name: "providers",
+    value: "github-copilot openai",
+  });
+});
+
 void test("parseCommand parses session status", () => {
   assert.deepEqual(parseCommand("session status"), { name: "session-status" });
 });
@@ -63,6 +70,7 @@ void test("help includes key commands", () => {
   assert.match(help, /copilot-queue done/);
   assert.match(help, /copilot-queue stop/);
   assert.match(help, /copilot-queue capture/);
+  assert.match(help, /copilot-queue providers/);
   assert.match(help, /copilot-queue autopilot on/);
   assert.match(help, /copilot-queue session reset/);
   assert.match(help, /copilot-queue wait-timeout/);

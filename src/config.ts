@@ -1,6 +1,6 @@
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 export const DEFAULT_ACTIVE_PROVIDERS = ["github-copilot"] as const;
 
@@ -64,6 +64,26 @@ function readProviderOverride(settings: PiSettingsFile | undefined): string[] | 
   }
 
   return undefined;
+}
+
+export function writeProjectConfiguredProviders(cwd: string, providers: string[]): string {
+  const path = join(cwd, ".pi", "settings.json");
+  const existing = readSettingsFile(path);
+  const nextProviders = normalizeProviders(providers) ?? [];
+  const nextQueue: CopilotQueueSettings =
+    existing?.copilotQueue && typeof existing.copilotQueue === "object"
+      ? { ...existing.copilotQueue }
+      : {};
+
+  delete nextQueue.provider;
+  nextQueue.providers = nextProviders;
+
+  const nextSettings: PiSettingsFile = existing ? { ...existing } : {};
+  nextSettings.copilotQueue = nextQueue;
+
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, `${JSON.stringify(nextSettings, null, 2)}\n`, "utf8");
+  return path;
 }
 
 function normalizeProviders(value: unknown): string[] | undefined {
