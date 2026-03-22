@@ -1,5 +1,10 @@
 import { EXTENSION_COMMAND } from "./constants.js";
 
+export interface CommandCompletion {
+  value: string;
+  label: string;
+}
+
 export type QueueCommand =
   | { name: "add"; value: string }
   | { name: "list" }
@@ -20,6 +25,42 @@ export type QueueCommand =
   | { name: "session-threshold"; minutes: string; toolCalls: string }
   | { name: "wait-timeout"; seconds: string }
   | { name: "help" };
+
+const TOP_LEVEL_COMPLETIONS: CommandCompletion[] = [
+  { value: "add ", label: "add <message> — queue a message" },
+  { value: "list", label: "list — show queued messages" },
+  { value: "clear", label: "clear — clear queued messages" },
+  { value: "fallback ", label: "fallback <message> — set fallback response" },
+  { value: "done", label: "done — release waiting ask_user with stop" },
+  { value: "stop", label: "stop — stop next ask_user and disable autopilot" },
+  { value: "capture on", label: "capture on — queue busy interactive input" },
+  { value: "capture off", label: "capture off — keep normal steering while busy" },
+  { value: "providers", label: "providers — show managed providers" },
+  { value: "settings", label: "settings — open Copilot Queue settings" },
+  { value: "autopilot on", label: "autopilot on — enable autopilot" },
+  { value: "autopilot off", label: "autopilot off — disable autopilot" },
+  { value: "autopilot add ", label: "autopilot add <message> — add autopilot prompt" },
+  { value: "autopilot list", label: "autopilot list — show autopilot prompts" },
+  { value: "autopilot clear", label: "autopilot clear — clear autopilot prompts" },
+  { value: "session status", label: "session status — show session counters" },
+  { value: "session reset", label: "session reset — reset session counters" },
+  { value: "session threshold 120 50", label: "session threshold 120 50 — set warning thresholds" },
+  { value: "wait-timeout 0", label: "wait-timeout 0 — wait indefinitely" },
+  { value: "wait-timeout 60", label: "wait-timeout 60 — fallback after 60 seconds" },
+  { value: "help", label: "help — show all commands" },
+];
+
+const FREEFORM_PREFIXES = ["add ", "fallback ", "autopilot add "];
+const COMMON_PROVIDER_NAMES = [
+  "github-copilot",
+  "openai",
+  "anthropic",
+  "google",
+  "openrouter",
+  "ollama",
+  "mistral",
+  "groq",
+];
 
 export function buildHelpText(): string {
   return [
@@ -46,14 +87,17 @@ export function buildHelpText(): string {
 }
 
 export function buildCommandArgumentCompletions(
-  prefix: string
-): { value: string; label: string }[] | null {
-  const suggestions = getCommandSuggestions(prefix);
-  if (suggestions.length === 0) {
+  prefix: string,
+  options?: { configuredProviders?: string[] }
+): CommandCompletion[] | null {
+  const trimmed = prefix.trimStart();
+
+  if (FREEFORM_PREFIXES.some((item) => trimmed.startsWith(item))) {
     return null;
   }
 
-  return suggestions.map((value) => ({ value, label: value }));
+  const completions = getCommandCompletions(trimmed, options?.configuredProviders ?? []);
+  return completions.length > 0 ? completions : null;
 }
 
 export function parseCommand(raw: string): QueueCommand {
@@ -94,97 +138,137 @@ export function parseCommand(raw: string): QueueCommand {
   }
 }
 
-function getCommandSuggestions(prefix: string): string[] {
-  const trimmed = prefix.trimStart();
-  if (!trimmed) {
-    return [
-      "add ",
-      "list",
-      "clear",
-      "fallback ",
-      "done",
-      "stop",
-      "capture ",
-      "providers ",
-      "settings",
-      "autopilot ",
-      "session ",
-      "wait-timeout ",
-      "help",
-    ];
+function getCommandCompletions(prefix: string, configuredProviders: string[]): CommandCompletion[] {
+  if (!prefix) {
+    return TOP_LEVEL_COMPLETIONS;
   }
 
-  const parts = trimmed.split(/\s+/);
+  const parts = prefix.split(/\s+/);
   const command = parts[0]?.toLowerCase() ?? "";
 
   if (parts.length === 1 && !prefix.endsWith(" ")) {
-    return [
-      "add ",
-      "list",
-      "clear",
-      "fallback ",
-      "done",
-      "stop",
-      "capture ",
-      "providers ",
-      "settings",
-      "autopilot ",
-      "session ",
-      "wait-timeout ",
-      "help",
-    ].filter((item) => item.startsWith(trimmed));
+    return filterCompletions(TOP_LEVEL_COMPLETIONS, prefix);
   }
 
   switch (command) {
     case "capture":
-      return matchNestedSuggestions(prefix, ["capture on", "capture off"]);
+      return filterCompletions(
+        [
+          { value: "capture on", label: "capture on — queue busy interactive input" },
+          { value: "capture off", label: "capture off — keep normal steering while busy" },
+        ],
+        prefix
+      );
     case "providers":
-      return getProviderSuggestions(prefix);
+      return filterCompletions(buildProviderCompletions(configuredProviders), prefix);
     case "autopilot":
-      return matchNestedSuggestions(prefix, [
-        "autopilot on",
-        "autopilot off",
-        "autopilot add ",
-        "autopilot list",
-        "autopilot clear",
-      ]);
+      return filterCompletions(
+        [
+          { value: "autopilot on", label: "autopilot on — enable autopilot" },
+          { value: "autopilot off", label: "autopilot off — disable autopilot" },
+          { value: "autopilot add ", label: "autopilot add <message> — add autopilot prompt" },
+          { value: "autopilot list", label: "autopilot list — show autopilot prompts" },
+          { value: "autopilot clear", label: "autopilot clear — clear autopilot prompts" },
+        ],
+        prefix
+      );
     case "session":
-      return matchNestedSuggestions(prefix, [
-        "session status",
-        "session reset",
-        "session threshold ",
-      ]);
+      return filterCompletions(
+        [
+          { value: "session status", label: "session status — show session counters" },
+          { value: "session reset", label: "session reset — reset session counters" },
+          {
+            value: "session threshold 120 50",
+            label: "session threshold 120 50 — default warning thresholds",
+          },
+          {
+            value: "session threshold 180 75",
+            label: "session threshold 180 75 — longer sessions",
+          },
+        ],
+        prefix
+      );
     case "wait-timeout":
-      return matchNestedSuggestions(prefix, [
-        "wait-timeout 0",
-        "wait-timeout 30",
-        "wait-timeout 60",
-      ]);
+      return filterCompletions(
+        [
+          { value: "wait-timeout 0", label: "wait-timeout 0 — wait indefinitely" },
+          { value: "wait-timeout 30", label: "wait-timeout 30 — fallback after 30 seconds" },
+          { value: "wait-timeout 60", label: "wait-timeout 60 — fallback after 60 seconds" },
+          { value: "wait-timeout 300", label: "wait-timeout 300 — fallback after 5 minutes" },
+        ],
+        prefix
+      );
     default:
       return [];
   }
 }
 
-function matchNestedSuggestions(prefix: string, suggestions: string[]): string[] {
-  const trimmed = prefix.trimStart();
-  return suggestions.filter((item) => item.startsWith(trimmed));
+function buildProviderCompletions(configuredProviders: string[]): CommandCompletion[] {
+  const providerNames = uniqueStrings([...configuredProviders, ...COMMON_PROVIDER_NAMES]);
+
+  const providerSetExamples = providerNames.flatMap((provider) => [
+    {
+      value: `providers ${provider}`,
+      label: `providers ${provider} — set project managed providers`,
+    },
+    {
+      value: `providers set ${provider}`,
+      label: `providers set ${provider} — set project managed providers`,
+    },
+    {
+      value: `providers project ${provider}`,
+      label: `providers project ${provider} — set project managed providers`,
+    },
+    {
+      value: `providers project set ${provider}`,
+      label: `providers project set ${provider} — set project managed providers`,
+    },
+    {
+      value: `providers global ${provider}`,
+      label: `providers global ${provider} — set global managed providers`,
+    },
+    {
+      value: `providers global set ${provider}`,
+      label: `providers global set ${provider} — set global managed providers`,
+    },
+  ]);
+
+  return [
+    { value: "providers", label: "providers — show managed providers" },
+    { value: "providers show", label: "providers show — show managed providers" },
+    { value: "providers list", label: "providers list — show managed providers" },
+    { value: "providers status", label: "providers status — show managed providers" },
+    { value: "providers off", label: "providers off — disable project provider routing" },
+    { value: "providers clear", label: "providers clear — disable project provider routing" },
+    { value: "providers set ", label: "providers set <name...> — set project managed providers" },
+    { value: "providers project ", label: "providers project — project provider commands" },
+    {
+      value: "providers project off",
+      label: "providers project off — disable project provider routing",
+    },
+    {
+      value: "providers project set ",
+      label: "providers project set <name...> — set project managed providers",
+    },
+    { value: "providers global ", label: "providers global — global provider commands" },
+    {
+      value: "providers global off",
+      label: "providers global off — disable global provider routing",
+    },
+    {
+      value: "providers global set ",
+      label: "providers global set <name...> — set global managed providers",
+    },
+    ...providerSetExamples,
+  ];
 }
 
-function getProviderSuggestions(prefix: string): string[] {
-  return matchNestedSuggestions(prefix, [
-    "providers global ",
-    "providers project ",
-    "providers show",
-    "providers list",
-    "providers status",
-    "providers set ",
-    "providers off",
-    "providers clear",
-    "providers global set ",
-    "providers global off",
-    "providers project set ",
-    "providers project off",
-  ]);
+function filterCompletions(completions: CommandCompletion[], prefix: string): CommandCompletion[] {
+  return completions.filter((item) => item.value.startsWith(prefix));
+}
+
+function uniqueStrings(values: string[]): string[] {
+  return [...new Set(values.filter(Boolean))];
 }
 
 function parseAutopilot(raw: string): QueueCommand {

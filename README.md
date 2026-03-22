@@ -164,7 +164,7 @@ You can also manage the project or global override from inside Pi:
 - Passing one or more provider names writes `.pi/settings.json` for the current project.
 - Prefixing with `global` writes `~/.pi/agent/settings.json` instead.
 - `off` writes an empty provider list for the selected scope.
-- Tab completion suggests the provider subcommands (`global`, `project`, `off`, `show`, `list`, `status`, `set`).
+- Tab completion covers the full command surface, including top-level commands, provider routing, session subcommands, timeout presets, and common provider names.
 
 ## Usage
 
@@ -194,14 +194,16 @@ Both commands request an explicit stop. If `ask_user` is currently waiting, it i
 /copilot-queue settings
 ```
 
-The settings UI lets you quickly adjust:
+The settings UI lets you adjust all current Copilot Queue settings from one place, including:
 
+- managed providers
 - busy input capture
 - status line visibility
 - empty-queue wait timeout
+- fallback response
+- warning thresholds
 - autopilot on/off
-
-Use the dedicated commands for provider routing, fallback text, and autopilot prompt editing.
+- autopilot prompt add/clear
 
 ### Interactive capture while busy (configured providers only)
 

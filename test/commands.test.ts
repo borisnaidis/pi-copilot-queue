@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { buildHelpText, parseCommand } from "../src/commands.js";
+import { buildCommandArgumentCompletions, buildHelpText, parseCommand } from "../src/commands.js";
 
 void test("parseCommand parses add", () => {
   assert.deepEqual(parseCommand("add hello world"), { name: "add", value: "hello world" });
@@ -65,6 +65,39 @@ void test("parseCommand parses wait-timeout", () => {
 
 void test("parseCommand returns help for unknown", () => {
   assert.deepEqual(parseCommand("wat"), { name: "help" });
+});
+
+void test("command completions include descriptive top-level suggestions", () => {
+  const completions = buildCommandArgumentCompletions("se");
+
+  assert.ok(completions);
+  assert.ok(completions.some((item) => item.value === "settings"));
+  assert.ok(completions.some((item) => item.label.includes("open Copilot Queue settings")));
+});
+
+void test("command completions include provider suggestions", () => {
+  const completions = buildCommandArgumentCompletions("providers g", {
+    configuredProviders: ["github-copilot"],
+  });
+
+  assert.ok(completions);
+  assert.ok(completions.some((item) => item.value === "providers github-copilot"));
+  assert.ok(completions.some((item) => item.value === "providers global "));
+});
+
+void test("command completions include scoped provider examples", () => {
+  const completions = buildCommandArgumentCompletions("providers project g", {
+    configuredProviders: ["github-copilot"],
+  });
+
+  assert.ok(completions);
+  assert.ok(completions.some((item) => item.value === "providers project github-copilot"));
+});
+
+void test("command completions stay out of freeform arguments", () => {
+  assert.equal(buildCommandArgumentCompletions("add hello"), null);
+  assert.equal(buildCommandArgumentCompletions("fallback continue"), null);
+  assert.equal(buildCommandArgumentCompletions("autopilot add next step"), null);
 });
 
 void test("help includes key commands", () => {
