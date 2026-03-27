@@ -12,7 +12,7 @@ This extension is inspired by [TaskSync](https://github.com/4regab/TaskSync)-sty
 - Supports autopilot prompt cycling (1→2→3→1…)
 - Activates queue/autopilot only on configured providers (defaults to `github-copilot`)
 - Injects a provider-targeted `ask_user` loop policy into the system prompt on each new run
-- Adds a hidden `ask_user` protocol reminder, and reinforces compatible provider payloads (`tool_choice: required` for OpenAI-style requests, `tool_choice: { type: "any" }` for Anthropic-style requests) when `ask_user` is available
+- Adds a hidden `ask_user` protocol reminder, and reinforces compatible provider payloads (`tool_choice: required` for OpenAI-style requests, `tool_choice: { type: "any" }` for Anthropic-style requests when thinking is not enabled) when `ask_user` is available
 - While a configured provider is actively running, normal interactive input is captured into queue by default (instead of triggering a new turn)
 - Interactive capture can be toggled with `/copilot-queue capture on|off` (`on` by default)
 - Tracks session elapsed time, `ask_user` call count, other tool-call count, and direct-reply misses in status line
@@ -189,6 +189,8 @@ You can also manage the global settings from inside Pi:
 ```
 
 Both commands request an explicit stop. If `ask_user` is currently waiting, it is released with `stop`. Otherwise the next `ask_user` call will immediately receive `stop`.
+
+After an explicit stop, the next managed-provider run is treated as a normal direct-reply turn. If you queue a new message or enable autopilot before that run, the `ask_user` loop is armed again immediately.
 
 ### Quick settings UI
 
