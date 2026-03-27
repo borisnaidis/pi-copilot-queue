@@ -5,7 +5,7 @@ import { dirname, join } from "node:path";
 import test from "node:test";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import extension from "../src/index.js";
-import { EXTENSION_COMMAND, TOOL_NAME } from "../src/constants.js";
+import { EXTENSION_COMMAND, STATE_ENTRY_TYPE, TOOL_NAME } from "../src/constants.js";
 
 interface Captured {
   commandName?: string;
@@ -168,6 +168,28 @@ void test("forces anthropic any tool choice for managed provider payloads when a
   ) as { tool_choice?: { type?: string } };
 
   assert.equal(result.tool_choice?.type, "any");
+});
+
+void test("does not force anthropic tool choice when thinking is enabled", () => {
+  const captured = createCaptured();
+  extension(createPi(captured));
+
+  const hook = captured.eventHandlers.get("before_provider_request");
+  assert.ok(hook);
+
+  const payload = {
+    tools: [
+      {
+        name: TOOL_NAME,
+        input_schema: { type: "object", properties: {}, required: [] },
+      },
+    ],
+    thinking: { type: "enabled", budget_tokens: 1024 },
+  };
+
+  const result = hook?.({ payload }, { model: { provider: "github-copilot" } }) as typeof payload;
+
+  assert.deepEqual(result, payload);
 });
 
 void test("interactive input during active run is queued instead of sent", async () => {
@@ -337,12 +359,100 @@ void test("stop command makes the next ask_user return stop", async () => {
   assert.equal(result.details.source, "stop");
 });
 
+void test("stop and done suppress ask_user policy until rearmed", async () => {
+  for (const command of ["stop", "done"] as const) {
+    const captured = createCaptured();
+    extension(createPi(captured));
+
+    const notifications: string[] = [];
+    const beforeAgentStartHook = captured.eventHandlers.get("before_agent_start");
+    const beforeProviderRequestHook = captured.eventHandlers.get("before_provider_request");
+    const contextHook = captured.eventHandlers.get("context");
+    const agentEndHook = captured.eventHandlers.get("agent_end");
+
+    assert.ok(captured.commandHandler);
+    assert.ok(beforeAgentStartHook);
+    assert.ok(beforeProviderRequestHook);
+    assert.ok(contextHook);
+    assert.ok(agentEndHook);
+
+    await captured.commandHandler?.(command, createCommandCtx());
+
+    for (let turn = 0; turn < 2; turn += 1) {
+      const beforeAgentStartResult: unknown = beforeAgentStartHook?.(
+        { systemPrompt: "base prompt" },
+        createToolCtx({ hasUI: true, notifications })
+      );
+      assert.equal(beforeAgentStartResult, undefined);
+
+      const contextResult = contextHook?.(
+        {
+          messages: [
+            {
+              customType: `${STATE_ENTRY_TYPE}:policy`,
+              content: "Copilot Queue protocol reminder:",
+            },
+            {
+              role: "user",
+              content: [{ type: "text", text: "nice" }],
+            },
+          ],
+        },
+        createToolCtx({ hasUI: true, notifications })
+      ) as { messages: { customType?: string }[] };
+      assert.deepEqual(contextResult.messages, [
+        {
+          role: "user",
+          content: [{ type: "text", text: "nice" }],
+        },
+      ]);
+
+      const payload = {
+        tools: [
+          {
+            type: "function",
+            function: { name: TOOL_NAME },
+          },
+        ],
+        tool_choice: "auto",
+      };
+      const providerRequestResult: unknown = beforeProviderRequestHook?.(
+        { payload },
+        createToolCtx({ hasUI: true, notifications })
+      );
+      assert.deepEqual(providerRequestResult, payload);
+
+      agentEndHook?.(
+        {
+          messages: [
+            {
+              role: "assistant",
+              content: [{ type: "text", text: "Yes." }],
+            },
+          ],
+        },
+        createToolCtx({ hasUI: true, notifications })
+      );
+    }
+
+    assert.ok(
+      notifications.every(
+        (line) =>
+          !line.includes("run ended with a direct assistant reply and never called ask_user")
+      )
+    );
+  }
+});
+
 void test("new queued input clears a pending stop request", async () => {
   const captured = createCaptured();
   extension(createPi(captured));
 
+  const beforeAgentStartHook = captured.eventHandlers.get("before_agent_start");
+
   assert.ok(captured.commandHandler);
   assert.ok(captured.toolExecute);
+  assert.ok(beforeAgentStartHook);
 
   await captured.commandHandler?.("stop", createCommandCtx());
   await captured.commandHandler?.("add continue instead", createCommandCtx());
@@ -354,9 +464,13 @@ void test("new queued input clears a pending stop request", async () => {
     undefined,
     createToolCtx()
   )) as { content: { type: string; text: string }[]; details: { source: string } };
+  const nextRun = beforeAgentStartHook?.({ systemPrompt: "base prompt" }, createToolCtx()) as {
+    systemPrompt: string;
+  };
 
   assert.equal(result.content[0]?.text, "continue instead");
   assert.equal(result.details.source, "queue");
+  assert.match(nextRun.systemPrompt, /call the ask_user tool/i);
 });
 
 void test("wait timeout returns fallback when no queued input arrives", async () => {

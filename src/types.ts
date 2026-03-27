@@ -3,6 +3,7 @@ export interface QueueState {
   fallbackResponse: string;
   captureInteractiveInput: boolean;
   stopRequested: boolean;
+  skipAskUserPolicyOnce: boolean;
   autopilotEnabled: boolean;
   autopilotPrompts: string[];
   autopilotIndex: number;

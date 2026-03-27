@@ -23,6 +23,7 @@ import { notifyTerminal } from "./notify.js";
 import type { QueueState } from "./types.js";
 
 const STOP_RESPONSE = "stop";
+const POLICY_MESSAGE_TYPE = `${STATE_ENTRY_TYPE}:policy`;
 let configuredProviders: string[] = [];
 let showStatusLine = true;
 
@@ -32,6 +33,7 @@ export default function copilotQueueExtension(pi: ExtensionAPI) {
   let state: QueueState = initialState();
   let pendingAskUserResolve: ((text: string) => void) | undefined;
   let currentRunStarted = false;
+  let currentRunAskUserSuppressed = false;
   let currentRunAskUserCallCount = 0;
   let currentRunOtherToolCallCount = 0;
 
@@ -75,6 +77,7 @@ export default function copilotQueueExtension(pi: ExtensionAPI) {
     pendingAskUserResolve = undefined;
     state = restoreFromContext(ctx);
     currentRunStarted = false;
+    currentRunAskUserSuppressed = false;
     currentRunAskUserCallCount = 0;
     currentRunOtherToolCallCount = 0;
     updateStatus(ctx, state, false);
@@ -92,18 +95,47 @@ export default function copilotQueueExtension(pi: ExtensionAPI) {
     updateStatus(ctx, state, hasPendingAskUser());
   });
 
+  pi.on("context", (event, ctx) => {
+    if (!isManagedProvider(ctx)) {
+      return;
+    }
+
+    const latestPolicyMessageIndex = state.skipAskUserPolicyOnce
+      ? -1
+      : findLatestPolicyMessageIndex(event.messages);
+    const filteredMessages = event.messages.filter(
+      (message, index) => !isPolicyMessage(message) || index === latestPolicyMessageIndex
+    );
+
+    if (filteredMessages.length === event.messages.length) {
+      return;
+    }
+
+    return { messages: filteredMessages };
+  });
+
   pi.on("before_agent_start", (event, ctx) => {
     if (!isManagedProvider(ctx)) {
       return;
     }
 
+    if (state.skipAskUserPolicyOnce) {
+      currentRunStarted = false;
+      currentRunAskUserSuppressed = true;
+      currentRunAskUserCallCount = 0;
+      currentRunOtherToolCallCount = 0;
+      updateStatus(ctx, state, hasPendingAskUser());
+      return;
+    }
+
+    currentRunAskUserSuppressed = false;
     currentRunStarted = true;
     currentRunAskUserCallCount = 0;
     currentRunOtherToolCallCount = 0;
 
     return {
       message: {
-        customType: `${STATE_ENTRY_TYPE}:policy`,
+        customType: POLICY_MESSAGE_TYPE,
         content: buildAskUserReminderMessage(state),
         display: false,
       },
@@ -112,7 +144,7 @@ export default function copilotQueueExtension(pi: ExtensionAPI) {
   });
 
   onBeforeProviderRequest(pi, (event, ctx) => {
-    if (!isManagedProvider(ctx)) {
+    if (!isManagedProvider(ctx) || state.skipAskUserPolicyOnce || currentRunAskUserSuppressed) {
       return event.payload;
     }
 
@@ -125,10 +157,12 @@ export default function copilotQueueExtension(pi: ExtensionAPI) {
     }
 
     const isAskUserCall = event.toolName === TOOL_NAME;
-    if (isAskUserCall) {
-      currentRunAskUserCallCount += 1;
-    } else {
-      currentRunOtherToolCallCount += 1;
+    if (currentRunStarted) {
+      if (isAskUserCall) {
+        currentRunAskUserCallCount += 1;
+      } else {
+        currentRunOtherToolCallCount += 1;
+      }
     }
 
     let nextState: QueueState = {
@@ -143,7 +177,16 @@ export default function copilotQueueExtension(pi: ExtensionAPI) {
   });
 
   pi.on("agent_end", (event, ctx) => {
-    if (!isManagedProvider(ctx) || !currentRunStarted) {
+    if (!isManagedProvider(ctx)) {
+      return;
+    }
+
+    if (currentRunAskUserSuppressed) {
+      currentRunAskUserSuppressed = false;
+      return;
+    }
+
+    if (!currentRunStarted) {
       return;
     }
 
@@ -200,13 +243,18 @@ export default function copilotQueueExtension(pi: ExtensionAPI) {
     }
 
     if (resolvePendingAskUser(text, ctx)) {
-      state = { ...state, stopRequested: false };
+      state = { ...state, stopRequested: false, skipAskUserPolicyOnce: false };
       persistState(pi, state);
       notify(ctx, "Busy run: sent your input to waiting ask_user.");
       return { action: "handled" };
     }
 
-    state = { ...state, stopRequested: false, queue: [...state.queue, text] };
+    state = {
+      ...state,
+      stopRequested: false,
+      skipAskUserPolicyOnce: false,
+      queue: [...state.queue, text],
+    };
     persistState(pi, state);
     updateStatus(ctx, state, hasPendingAskUser());
     notify(ctx, `Busy run: queued follow-up (#${state.queue.length}).`);
@@ -228,13 +276,18 @@ export default function copilotQueueExtension(pi: ExtensionAPI) {
           }
 
           if (resolvePendingAskUser(command.value, ctx)) {
-            state = { ...state, stopRequested: false };
+            state = { ...state, stopRequested: false, skipAskUserPolicyOnce: false };
             persistState(pi, state);
             notify(ctx, "Delivered message to waiting ask_user.");
             return Promise.resolve();
           }
 
-          state = { ...state, stopRequested: false, queue: [...state.queue, command.value] };
+          state = {
+            ...state,
+            stopRequested: false,
+            skipAskUserPolicyOnce: false,
+            queue: [...state.queue, command.value],
+          };
           persistState(pi, state);
           updateStatus(ctx, state, hasPendingAskUser());
           notify(ctx, `Queued (#${state.queue.length}): ${command.value}`);
@@ -265,6 +318,7 @@ export default function copilotQueueExtension(pi: ExtensionAPI) {
             ...state,
             queue: [],
             stopRequested: true,
+            skipAskUserPolicyOnce: true,
             autopilotEnabled: false,
           };
           persistState(pi, state);
@@ -426,13 +480,23 @@ export default function copilotQueueExtension(pi: ExtensionAPI) {
               );
             },
             onAutopilotEnabledChange: (enabled) => {
-              state = { ...state, autopilotEnabled: enabled };
+              state = {
+                ...state,
+                stopRequested: enabled ? false : state.stopRequested,
+                skipAskUserPolicyOnce: enabled ? false : state.skipAskUserPolicyOnce,
+                autopilotEnabled: enabled,
+              };
               persistState(pi, state);
               updateStatus(ctx, state, hasPendingAskUser());
               notify(ctx, `Autopilot ${enabled ? "enabled" : "disabled"}.`);
             },
             onAutopilotPromptAdd: (prompt) => {
-              state = { ...state, autopilotPrompts: [...state.autopilotPrompts, prompt] };
+              state = {
+                ...state,
+                stopRequested: false,
+                skipAskUserPolicyOnce: false,
+                autopilotPrompts: [...state.autopilotPrompts, prompt],
+              };
               persistState(pi, state);
               updateStatus(ctx, state, hasPendingAskUser());
               notify(ctx, `Autopilot prompt added (#${state.autopilotPrompts.length}).`);
@@ -447,7 +511,12 @@ export default function copilotQueueExtension(pi: ExtensionAPI) {
         }
 
         case "autopilot-on": {
-          state = { ...state, autopilotEnabled: true };
+          state = {
+            ...state,
+            stopRequested: false,
+            skipAskUserPolicyOnce: false,
+            autopilotEnabled: true,
+          };
           persistState(pi, state);
           updateStatus(ctx, state, hasPendingAskUser());
           notify(ctx, "Autopilot enabled.");
@@ -467,7 +536,12 @@ export default function copilotQueueExtension(pi: ExtensionAPI) {
             notify(ctx, "Missing message. Usage: /copilot-queue autopilot add <message>");
             return Promise.resolve();
           }
-          state = { ...state, autopilotPrompts: [...state.autopilotPrompts, command.value] };
+          state = {
+            ...state,
+            stopRequested: false,
+            skipAskUserPolicyOnce: false,
+            autopilotPrompts: [...state.autopilotPrompts, command.value],
+          };
           persistState(pi, state);
           updateStatus(ctx, state, hasPendingAskUser());
           notify(ctx, `Autopilot prompt added (#${state.autopilotPrompts.length}).`);
@@ -507,6 +581,7 @@ export default function copilotQueueExtension(pi: ExtensionAPI) {
             askUserCallCount: 0,
             otherToolCallCount: 0,
             stopRequested: false,
+            skipAskUserPolicyOnce: false,
             completedRunCount: 0,
             askUserRunCount: 0,
             missedAskUserRunCount: 0,
@@ -1171,6 +1246,24 @@ function buildAskUserReminderMessage(state: QueueState): string {
   ].join("\n");
 }
 
+function findLatestPolicyMessageIndex(messages: unknown[]): number {
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    if (isPolicyMessage(messages[i])) {
+      return i;
+    }
+  }
+
+  return -1;
+}
+
+function isPolicyMessage(message: unknown): boolean {
+  if (!message || typeof message !== "object") {
+    return false;
+  }
+
+  return (message as { customType?: unknown }).customType === POLICY_MESSAGE_TYPE;
+}
+
 function onBeforeProviderRequest(
   pi: ExtensionAPI,
   handler: (event: { payload: unknown }, ctx: ExtensionContext) => unknown
@@ -1214,6 +1307,10 @@ function forceRequiredToolChoice(payload: unknown): unknown {
       return payload;
     }
 
+    if (isAnthropicThinkingEnabled(payload)) {
+      return payload;
+    }
+
     const currentToolChoice = payload.tool_choice;
     if (currentToolChoice && typeof currentToolChoice === "object") {
       const currentType = (currentToolChoice as { type?: unknown }).type;
@@ -1247,6 +1344,7 @@ function isOpenAiToolChoicePayload(payload: unknown): payload is {
 function isAnthropicToolChoicePayload(payload: unknown): payload is {
   tools: unknown[];
   tool_choice?: unknown;
+  thinking?: unknown;
 } {
   if (!payload || typeof payload !== "object" || !("tools" in payload)) {
     return false;
@@ -1254,6 +1352,15 @@ function isAnthropicToolChoicePayload(payload: unknown): payload is {
 
   const tools = (payload as { tools?: unknown }).tools;
   return Array.isArray(tools) && tools.some(isAnthropicTool);
+}
+
+function isAnthropicThinkingEnabled(payload: { thinking?: unknown }): boolean {
+  if (!payload.thinking || typeof payload.thinking !== "object") {
+    return false;
+  }
+
+  const type = (payload.thinking as { type?: unknown }).type;
+  return type !== "disabled";
 }
 
 function isOpenAiFunctionTool(tool: unknown): boolean {
@@ -1383,6 +1490,7 @@ function initialState(): QueueState {
     fallbackResponse: DEFAULT_FALLBACK_RESPONSE,
     captureInteractiveInput: true,
     stopRequested: false,
+    skipAskUserPolicyOnce: false,
     autopilotEnabled: false,
     autopilotPrompts: [],
     autopilotIndex: 0,
@@ -1498,6 +1606,7 @@ function parseQueueState(value: unknown): QueueState | undefined {
     fallbackResponse?: unknown;
     captureInteractiveInput?: unknown;
     stopRequested?: unknown;
+    skipAskUserPolicyOnce?: unknown;
     autopilotEnabled?: unknown;
     autopilotPrompts?: unknown;
     autopilotIndex?: unknown;
@@ -1533,6 +1642,8 @@ function parseQueueState(value: unknown): QueueState | undefined {
 
   const stopRequested =
     typeof candidate.stopRequested === "boolean" ? candidate.stopRequested : false;
+  const skipAskUserPolicyOnce =
+    typeof candidate.skipAskUserPolicyOnce === "boolean" ? candidate.skipAskUserPolicyOnce : false;
 
   const autopilotPrompts = Array.isArray(candidate.autopilotPrompts)
     ? candidate.autopilotPrompts.filter((item): item is string => typeof item === "string")
@@ -1627,6 +1738,7 @@ function parseQueueState(value: unknown): QueueState | undefined {
     fallbackResponse: candidate.fallbackResponse,
     captureInteractiveInput,
     stopRequested,
+    skipAskUserPolicyOnce,
     autopilotEnabled,
     autopilotPrompts,
     autopilotIndex,
